@@ -1,25 +1,22 @@
 use crate::args::RebornCliArgs;
 use crate::mappings;
+use crate::mappings::{DeobfMappingsType, Mappings};
 use classfile::classfile::ClassFile;
 use indoc::indoc;
 use linked_hash_map::LinkedHashMap;
 use std::io::{BufReader, BufWriter, Cursor, Error, Read, Write, stdout};
 use std::ops::AddAssign;
-use std::path::{Display, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use utils::cache;
 
 const REMAPPED_SUFFIX: &str = "-remapped-{channel}-{channel_version}.jar";
+const REMAPPED_CUSTOM_SUFFIX: &str = "-remapped-custom.jar";
 const JAR_SUFFIX: &str = ".jar";
 
-pub fn build_output_file_name<P: AsRef<Path>>(
-    input_file_name: String,
-    path: P,
-    channel: &str,
-    channel_version: &str,
-) -> String {
+pub fn build_output_file_name<P: AsRef<Path>>(input_file_name: String, path: P, args: &RebornCliArgs) -> String {
     let canonical_path = match path.as_ref().canonicalize() {
         Ok(it) => it,
         Err(err) => {
@@ -27,9 +24,8 @@ pub fn build_output_file_name<P: AsRef<Path>>(
             exit(-1);
         }
     };
-    let filename_suffix = &*REMAPPED_SUFFIX
-        .replace("{channel}", channel)
-        .replace("{channel_version}", channel_version);
+
+    let filename_suffix = &*build_mappings_typed_based_filename_suffix(args);
     if path.as_ref().is_dir() {
         canonical_path
             .join(input_file_name.strip_suffix(JAR_SUFFIX).unwrap().to_owned() + filename_suffix)
@@ -76,6 +72,21 @@ pub fn remap_files(args: &RebornCliArgs, files: &[String]) {
     }
 }
 
+fn build_fallback_filename(args: &RebornCliArgs, input_file_name: &str) -> String {
+    input_file_name.strip_suffix(JAR_SUFFIX).unwrap().to_owned() + &*build_mappings_typed_based_filename_suffix(args)
+}
+
+fn build_mappings_typed_based_filename_suffix(args: &RebornCliArgs) -> String {
+    let suffix = match args.mappings_type {
+        DeobfMappingsType::VersionsJSON => &*REMAPPED_SUFFIX
+            .replace("{channel}", &args.mappings_channel)
+            .replace("{channel_version}", &args.mappings_version),
+
+        DeobfMappingsType::Custom => REMAPPED_CUSTOM_SUFFIX,
+    };
+    String::from(suffix)
+}
+
 pub fn remap_file(args: &RebornCliArgs, input_source_index: usize, input_file_full_path: &String) {
     let input_file_name = Path::new(input_file_full_path)
         .file_name()
@@ -85,36 +96,18 @@ pub fn remap_file(args: &RebornCliArgs, input_source_index: usize, input_file_fu
         .to_string();
 
     let output_file_path = match args.output {
-        None => {
-            let filename_suffix = &*REMAPPED_SUFFIX
-                .replace("{channel}", &args.mappings_channel)
-                .replace("{channel_version}", &args.mappings_version);
-            input_file_name.strip_suffix(JAR_SUFFIX).unwrap().to_owned() + filename_suffix
-        }
+        None => build_fallback_filename(args, &input_file_name),
         Some(ref res) => {
             if res.len() != args.input.len() {
                 match &res.len() {
-                    1 => build_output_file_name(
-                        input_file_name,
-                        Path::new(res.first().unwrap()),
-                        &args.mappings_channel,
-                        &args.mappings_version,
-                    ),
+                    1 => build_output_file_name(input_file_name, Path::new(res.first().unwrap()), args),
                     _ => {
                         println!("output must contain N entries where N is a number of entry files or only one entry");
-                        let filename_suffix = &*REMAPPED_SUFFIX
-                            .replace("{channel}", &args.mappings_channel)
-                            .replace("{channel_version}", &args.mappings_version);
-                        input_file_name.strip_suffix(JAR_SUFFIX).unwrap().to_owned() + filename_suffix
+                        build_fallback_filename(args, &input_file_name)
                     }
                 }
             } else {
-                build_output_file_name(
-                    input_file_name,
-                    Path::new(res.first().unwrap()),
-                    &args.mappings_channel,
-                    &args.mappings_version,
-                )
+                build_output_file_name(input_file_name, Path::new(res.first().unwrap()), args)
             }
         }
     };
@@ -131,7 +124,10 @@ pub fn remap_file(args: &RebornCliArgs, input_source_index: usize, input_file_fu
         .join(args.game_version.as_str())
         .join(args.mappings_channel.as_str())
         .join(args.mappings_version.as_str());
-    let mut mappings = mappings::load_all_mappings(mapping_dir).unwrap();
+    let mut mappings = match args.mappings_type {
+        DeobfMappingsType::VersionsJSON => mappings::load_all_mappings(mapping_dir).unwrap(),
+        DeobfMappingsType::Custom => Mappings::default(),
+    };
 
     if args.verbose > 0 {
         println!("debug: {:?}", args.debug);
@@ -248,7 +244,7 @@ pub fn remap_jar(
         let mangled_name = PathBuf::clone(&file.mangled_name());
         let filename = mangled_name.to_str().unwrap();
         let file_size = file.size();
-        println!("remapping {}th file with name {}", &i, &filename);
+        println!("trying to remap {}th file with name {}", &i, &filename);
 
         if filename.ends_with(".class") {
             match args.verbose {

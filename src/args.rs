@@ -1,4 +1,4 @@
-use crate::mappings::ModLoader;
+use crate::mappings::{DeobfMappingsType, ModLoader};
 use clap::Parser;
 
 #[derive(Parser, Clone, Debug)]
@@ -51,6 +51,14 @@ effect as 3\n"
 
     #[arg(
         long,
+        value_enum,
+        default_value_t = DeobfMappingsType::VersionsJSON,
+        help = "Deobfuscate jar versions source - versions.json or custom"
+    )]
+    pub mappings_type: DeobfMappingsType,
+
+    #[arg(
+        long,
         short,
         default_value = "stable",
         help = "Mappings 'channel', e.g. extra path after version. Commonly used are 'stable' for
@@ -68,7 +76,6 @@ stable channel on old versions\n"
 
     #[arg(
         long,
-        short,
         help = "Extra mappings to be used. They are added over default mappings for chosen version
 and may override already using mappings.
 General extra mappings example: --extra-mappings='<target>:<source one>;<target>:<source two>'
@@ -300,6 +307,7 @@ impl Default for RebornCliArgs {
             print_code: false,
             game_version: "1.7.10".to_string(),
             mod_loader: ModLoader::Forge,
+            mappings_type: DeobfMappingsType::VersionsJSON,
             mappings_channel: "stable".to_string(),
             mappings_version: "12".to_string(),
             extra_mappings: vec![],

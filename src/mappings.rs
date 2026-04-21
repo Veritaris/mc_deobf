@@ -3,6 +3,7 @@ use linked_hash_map::LinkedHashMap;
 use serde::Deserialize;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs;
+use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
 pub const MAPPINGS_DIR: &str = "resources/mappings/1.7.10/stable/12"; // TODO(Veritaris): remove after cache && mappings downloading implemented successfully
@@ -12,6 +13,12 @@ pub enum ModLoader {
     Forge,
     NeoForge,
     Fabric,
+}
+
+#[derive(PartialOrd, PartialEq, Debug, Copy, Clone, ValueEnum, serde::Deserialize, serde::Serialize)]
+pub enum DeobfMappingsType {
+    VersionsJSON,
+    Custom,
 }
 
 impl Display for ModLoader {
@@ -61,6 +68,7 @@ pub struct MappingsSource {
     pub kind: MappingKind,
 }
 
+#[derive(Default)]
 pub struct Mappings {
     pub fields: LinkedHashMap<String, String>,
     pub methods: LinkedHashMap<String, String>,
@@ -109,26 +117,55 @@ pub fn merge_mappings(extra_mappings: &Vec<String>, mappings: &mut Mappings) {
     for mapping_source in extra_mappings {
         match parse_mappings_source(mapping_source) {
             Ok(source) => {
-                if let MappingsSourceType::Inline = source.source_type {
-                    let values: Vec<(&str, &str)> =
-                        source.source.split(";").filter_map(|e| e.split_once("=")).collect();
-                    match source.kind {
-                        MappingKind::Fields => {
-                            for (k, v) in values {
-                                mappings.fields.insert(String::from(k), String::from(v));
+                let table_to_populate = match source.kind {
+                    MappingKind::Fields => &mut mappings.fields,
+                    MappingKind::Methods => &mut mappings.methods,
+                    MappingKind::Params => &mut mappings.params,
+                };
+
+                match source.source_type {
+                    MappingsSourceType::LocalFile => {
+                        let mappings_url = match url::Url::parse(&source.source) {
+                            Ok(url) => url,
+                            Err(err) => {
+                                eprintln!(
+                                    "Unable to parse mappings file location ({}): error: {}",
+                                    source.source, err
+                                );
+                                continue;
                             }
+                        };
+                        if mappings_url.scheme() != "file" {
+                            eprintln!(
+                                "file:// scheme expected, {} provided ({})",
+                                mappings_url.scheme(),
+                                source.source
+                            );
+                            continue;
                         }
-                        MappingKind::Methods => {
-                            for (k, v) in values {
-                                mappings.methods.insert(String::from(k), String::from(v));
+                        match read_to_string(mappings_url.path()) {
+                            Ok(content) => {
+                                let parsed_mappings = tsrg_trie::csv_parser::parse_mappings_csv(content);
+                                for (k, v) in parsed_mappings {
+                                    table_to_populate.insert(k, v.mcp_name.unwrap_or("".to_string()));
+                                }
                             }
-                        }
-                        MappingKind::Params => {
-                            for (k, v) in values {
-                                mappings.params.insert(String::from(k), String::from(v));
+                            Err(err) => {
+                                eprintln!("Unable to load mappings file {}, err={}", source.source, err);
                             }
+                        };
+                    }
+                    MappingsSourceType::WebFile => {
+                        todo!("Not yet implemented, sorry");
+                    }
+                    MappingsSourceType::Inline => {
+                        let values: Vec<(&str, &str)> =
+                            source.source.split(";").filter_map(|e| e.split_once("=")).collect();
+
+                        for (k, v) in values {
+                            table_to_populate.insert(String::from(k), String::from(v));
                         }
-                    };
+                    }
                 }
                 println!("    {:?}", source);
             }
