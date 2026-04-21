@@ -19,6 +19,9 @@ effect as 3\n"
     #[arg(long, default_value = "false", help = "Print class after reading if --debug\n")]
     pub print_class: bool,
 
+    #[arg(long, help_heading = "Suffix to be added to deobfuscated JAR")]
+    pub deobf_suffix: Option<String>,
+
     #[arg(
         long,
         default_value = "false",
@@ -305,6 +308,7 @@ impl Default for RebornCliArgs {
             print_class: false,
             print_cpool: false,
             print_code: false,
+            deobf_suffix: None,
             game_version: "1.7.10".to_string(),
             mod_loader: ModLoader::Forge,
             mappings_type: DeobfMappingsType::VersionsJSON,

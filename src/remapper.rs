@@ -77,6 +77,12 @@ fn build_fallback_filename(args: &RebornCliArgs, input_file_name: &str) -> Strin
 }
 
 fn build_mappings_typed_based_filename_suffix(args: &RebornCliArgs) -> String {
+    if let Some(custom_suffix) = &args.deobf_suffix
+        && !custom_suffix.is_empty()
+    {
+        return format!("-{}.jar", custom_suffix);
+    }
+
     let suffix = match args.mappings_type {
         DeobfMappingsType::VersionsJSON => &*REMAPPED_SUFFIX
             .replace("{channel}", &args.mappings_channel)
