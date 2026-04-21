@@ -255,7 +255,9 @@ pub fn remap_jar(
         }
 
         let mangled_name = PathBuf::clone(&file.mangled_name());
-        let filename = mangled_name.to_str().unwrap();
+        let filename_raw = mangled_name.to_str().unwrap();
+        let filename_owned = filename_raw.replace('\\', "/");
+        let filename = filename_owned.as_str();
         let file_size = file.size();
         println!("trying to remap {}th file with name {}", &i, &filename);
 
