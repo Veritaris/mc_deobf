@@ -4,6 +4,7 @@ use crate::mappings::{DeobfMappingsType, Mappings};
 use classfile::classfile::ClassFile;
 use indoc::indoc;
 use linked_hash_map::LinkedHashMap;
+use std::fs::ReadDir;
 use std::io::{stdout, BufReader, BufWriter, Cursor, Error, Read, Write};
 use std::ops::AddAssign;
 use std::path::{Path, PathBuf};
@@ -15,33 +16,6 @@ use utils::cache;
 const REMAPPED_SUFFIX: &str = "-remapped-{channel}-{channel_version}.jar";
 const REMAPPED_CUSTOM_SUFFIX: &str = "-remapped-custom.jar";
 const JAR_SUFFIX: &str = ".jar";
-
-pub fn build_output_file_name<P: AsRef<Path>>(input_file_name: String, path: P, args: &RebornCliArgs) -> String {
-    let canonical_path = match path.as_ref().canonicalize() {
-        Ok(it) => it,
-        Err(err) => {
-            eprintln!("{}", err);
-            exit(-1);
-        }
-    };
-
-    let filename_suffix = &*build_mappings_typed_based_filename_suffix(args);
-    if path.as_ref().is_dir() {
-        canonical_path
-            .join(input_file_name.strip_suffix(JAR_SUFFIX).unwrap().to_owned() + filename_suffix)
-            .to_str()
-            .unwrap()
-            .to_string()
-    } else {
-        canonical_path
-            .to_str()
-            .unwrap()
-            .strip_suffix(JAR_SUFFIX)
-            .unwrap()
-            .to_owned()
-            + filename_suffix
-    }
-}
 
 pub fn remap_files(args: &RebornCliArgs, files: &[String]) {
     let files_amount = files.len();
@@ -93,30 +67,61 @@ fn build_mappings_typed_based_filename_suffix(args: &RebornCliArgs) -> String {
     String::from(suffix)
 }
 
-pub fn remap_file(args: &RebornCliArgs, input_source_index: usize, input_file_full_path: &String) {
-    let input_file_name = Path::new(input_file_full_path)
+fn join_output_file_name<P: AsRef<Path>>(input_file_name: String, path: P, args: &RebornCliArgs) -> String {
+    let canonical_path = match path.as_ref().canonicalize() {
+        Ok(it) => it,
+        Err(err) => {
+            eprintln!("{}", err);
+            exit(-1);
+        }
+    };
+
+    let filename_suffix = &*build_mappings_typed_based_filename_suffix(args);
+    if path.as_ref().is_dir() {
+        canonical_path
+            .join(input_file_name.strip_suffix(JAR_SUFFIX).unwrap().to_owned() + filename_suffix)
+            .to_str()
+            .unwrap()
+            .to_string()
+    } else {
+        canonical_path
+            .to_str()
+            .unwrap()
+            .strip_suffix(JAR_SUFFIX)
+            .unwrap()
+            .to_owned()
+            + filename_suffix
+    }
+}
+
+fn build_output_file_name(args: &RebornCliArgs, input_file_absolute_path: &str) -> String {
+    let input_file_name = Path::new(input_file_absolute_path)
         .file_name()
         .unwrap()
         .to_str()
         .unwrap()
         .to_string();
 
-    let output_file_path = match args.output {
+    match args.output {
         None => build_fallback_filename(args, &input_file_name),
         Some(ref res) => {
             if res.len() != args.input.len() {
                 match &res.len() {
-                    1 => build_output_file_name(input_file_name, Path::new(res.first().unwrap()), args),
+                    1 => join_output_file_name(input_file_name, Path::new(res.first().unwrap()), args),
                     _ => {
                         println!("output must contain N entries where N is a number of entry files or only one entry");
                         build_fallback_filename(args, &input_file_name)
                     }
                 }
             } else {
-                build_output_file_name(input_file_name, Path::new(res.first().unwrap()), args)
+                join_output_file_name(input_file_name, Path::new(res.first().unwrap()), args)
             }
         }
-    };
+    }
+}
+
+pub fn remap_file(args: &RebornCliArgs, input_source_index: usize, input_file_full_path: &str) {
+    let output_file_path = build_output_file_name(args, input_file_full_path);
 
     let input_file_path = Path::new(input_file_full_path);
     let input_file = std::fs::File::open(input_file_path).unwrap();
@@ -202,21 +207,7 @@ pub fn gather_input_files(input_files: &mut Vec<String>, dir_files: &Vec<String>
             input_files.push(String::from(path.canonicalize().unwrap().to_str().unwrap()));
         } else if path.is_dir() {
             let nested_dir_files: Vec<String> = match std::fs::read_dir(file_path) {
-                Ok(files) => files
-                    .into_iter()
-                    .filter_map(|e| match e {
-                        Ok(file) => {
-                            if !(file.metadata().unwrap().is_dir()
-                                || file.path().to_str().unwrap().ends_with(JAR_SUFFIX))
-                            {
-                                None
-                            } else {
-                                file.path().to_str().map(String::from)
-                            }
-                        }
-                        Err(_) => None,
-                    })
-                    .collect(),
+                Ok(files) => gather_nested_files(files),
                 Err(err) => {
                     println!("cannot list directory {file_path}, err='{err}'");
                     continue;
@@ -225,6 +216,22 @@ pub fn gather_input_files(input_files: &mut Vec<String>, dir_files: &Vec<String>
             gather_input_files(input_files, &nested_dir_files);
         }
     }
+}
+
+fn gather_nested_files(files: ReadDir) -> Vec<String> {
+    files
+        .into_iter()
+        .filter_map(|e| match e {
+            Ok(file) => {
+                if !(file.metadata().unwrap().is_dir() || file.path().to_str().unwrap().ends_with(JAR_SUFFIX)) {
+                    None
+                } else {
+                    file.path().to_str().map(String::from)
+                }
+            }
+            Err(_) => None,
+        })
+        .collect()
 }
 
 pub fn remap_jar(
@@ -242,7 +249,7 @@ pub fn remap_jar(
     println!("found {} files entries in archive", &files_amount);
 
     for i in 0..files_amount {
-        let file: zip::read::ZipFile<'_, BufReader<std::fs::File>> = jar.by_index(i)?;
+        let mut file: zip::read::ZipFile<'_, BufReader<std::fs::File>> = jar.by_index(i)?;
         if file.is_dir() {
             continue;
         }
@@ -253,53 +260,8 @@ pub fn remap_jar(
         println!("trying to remap {}th file with name {}", &i, &filename);
 
         if filename.ends_with(".class") {
-            match args.verbose {
-                0..=2 => (),
-                _ => {
-                    let msg = format!(
-                        indoc!(
-                            r#"
-                    found class file {}
-                      compression: {}
-                      size: {} bytes
-                    "#
-                        ),
-                        filename,
-                        file.compression(),
-                        file_size
-                    );
-                    println!("{}", msg)
-                }
-            };
-            let mut zip_reader = BufReader::new(file);
-            let mut tmp_buf = vec![0u8; file_size as usize];
-            zip_reader.read_exact(&mut tmp_buf)?;
-            let reader = BufReader::new(Cursor::new(tmp_buf));
-
-            let classfile_raw = if args.no_deobf {
-                ClassFile::read(reader, None)
-            } else {
-                ClassFile::read(reader, Some(mappings))
-            };
-
-            let classfile = match classfile_raw {
-                Ok(cf) => {
-                    if args.debug {
-                        println!("{:?}", cf)
-                    } else if args.print_class {
-                        println!("{}", cf)
-                    };
-                    cf
-                }
-                Err(err) => {
-                    println!("error while reading class='{filename}', error={err}");
-                    continue;
-                }
-            };
-            classfile.write(&mut output_jar, filename, args.get_deflate_compress_level())?;
-        } else if file.is_file()
-            && (!args.strip_resources || filename.eq("MANIFEST.MF") || filename.ends_with("_at.cfg"))
-        {
+            process_classfile(&mut output_jar, args, filename, &mut file, file_size, mappings)?;
+        } else if need_strip_file(args, &file, filename) {
             match output_jar.raw_copy_file(file) {
                 Ok(_) => {
                     continue;
@@ -312,5 +274,68 @@ pub fn remap_jar(
         }
     }
     output_jar.finish()?;
+    Ok(())
+}
+
+fn need_strip_file(
+    args: &RebornCliArgs,
+    file: &zip::read::ZipFile<'_, BufReader<std::fs::File>>,
+    filename: &str,
+) -> bool {
+    file.is_file() && (!args.strip_resources || filename.eq("MANIFEST.MF") || filename.ends_with("_at.cfg"))
+}
+
+fn process_classfile(
+    output_jar: &mut zip::ZipWriter<BufWriter<std::fs::File>>,
+    args: &RebornCliArgs,
+    filename: &str,
+    file: &mut zip::read::ZipFile<'_, BufReader<std::fs::File>>,
+    file_size: u64,
+    mappings: &LinkedHashMap<String, String>,
+) -> Result<(), Error> {
+    match args.verbose {
+        0..=2 => (),
+        _ => {
+            let msg = format!(
+                indoc!(
+                    r#"
+                    found class file {}
+                      compression: {}
+                      size: {} bytes
+                    "#
+                ),
+                filename,
+                file.compression(),
+                file_size
+            );
+            println!("{}", msg)
+        }
+    };
+    let mut zip_reader = BufReader::new(file);
+    let mut tmp_buf = vec![0u8; file_size as usize];
+    zip_reader.read_exact(&mut tmp_buf)?;
+    let reader = BufReader::new(Cursor::new(tmp_buf));
+
+    let classfile_raw = if args.no_deobf {
+        ClassFile::read(reader, None)
+    } else {
+        ClassFile::read(reader, Some(mappings))
+    };
+
+    let classfile = match classfile_raw {
+        Ok(cf) => {
+            if args.debug {
+                println!("{:?}", cf)
+            } else if args.print_class {
+                println!("{}", cf)
+            };
+            cf
+        }
+        Err(err) => {
+            println!("error while reading class='{filename}', error={err}");
+            return Err(Error::other(format!("{}", err)));
+        }
+    };
+    classfile.write(output_jar, filename, args.get_deflate_compress_level())?;
     Ok(())
 }
