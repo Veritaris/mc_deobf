@@ -143,7 +143,14 @@ pub fn merge_mappings(extra_mappings: &Vec<String>, mappings: &mut Mappings) {
                             );
                             continue;
                         }
-                        match read_to_string(mappings_url.path()) {
+                        let mappings_file_path = match mappings_url.to_file_path() {
+                            Ok(path) => path,
+                            Err(_) => {
+                                eprintln!("Unable to convert mappings path ({}) to fs path", mappings_url);
+                                continue;
+                            }
+                        };
+                        match read_to_string(mappings_file_path) {
                             Ok(content) => {
                                 let parsed_mappings = tsrg_trie::csv_parser::parse_mappings_csv(content);
                                 for (k, v) in parsed_mappings {
