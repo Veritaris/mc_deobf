@@ -4,7 +4,7 @@ use crate::mappings::{DeobfMappingsType, Mappings};
 use classfile::classfile::ClassFile;
 use indoc::indoc;
 use linked_hash_map::LinkedHashMap;
-use std::io::{BufReader, BufWriter, Cursor, Error, Read, Write, stdout};
+use std::io::{stdout, BufReader, BufWriter, Cursor, Error, Read, Write};
 use std::ops::AddAssign;
 use std::path::{Path, PathBuf};
 use std::process::exit;
